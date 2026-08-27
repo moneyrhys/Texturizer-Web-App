@@ -1,0 +1,183 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg: #0a0a0d;
+  --panel: #16161a;
+  --panel-2: #1e1e24;
+  --bezel: #2a2a30;
+  --bezel-hi: #3a3a44;
+  --rim: #0f0f13;
+  --text: #e8dfd3;
+  --text-dim: #7d7686;
+  --text-mute: #55505c;
+  --accent: #f0863a;           /* cactus amber */
+  --accent-hot: #ffb066;
+  --accent-glow: #e98a2b55;
+  --led: #6ee7b7;              /* active LED green */
+  --led-glow: #6ee7b755;
+  --danger: #ef476f;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html, body, #root {
+  margin: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font-family: "Barlow Condensed", "Helvetica Neue", sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  overscroll-behavior: none;
+}
+
+.font-display { font-family: "Michroma", "Barlow Condensed", sans-serif; letter-spacing: 0.08em; }
+.font-mono    { font-family: "JetBrains Mono", ui-monospace, monospace; }
+.font-label   { font-family: "Barlow Condensed", sans-serif; letter-spacing: 0.18em; text-transform: uppercase; font-weight: 600; }
+
+/* subtle grain overlay */
+.grain {
+  position: relative;
+}
+.grain::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='140' height='140'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0.9  0 0 0 0 0.85  0 0 0 0 0.8  0 0 0 0.09 0'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>");
+  mix-blend-mode: overlay;
+  opacity: 0.35;
+  border-radius: inherit;
+}
+
+.rack {
+  background:
+    radial-gradient(1200px 500px at 15% -10%, #1a1720 0%, transparent 60%),
+    radial-gradient(1000px 500px at 90% 110%, #16121b 0%, transparent 60%),
+    linear-gradient(180deg, #0d0d11 0%, #08080b 100%);
+}
+
+.panel {
+  background:
+    linear-gradient(180deg, #1c1c22 0%, #14141a 100%);
+  border: 1px solid #24242c;
+  box-shadow:
+    inset 0 1px 0 #2f2f38,
+    inset 0 -1px 0 #05050a,
+    0 24px 40px -20px rgba(0,0,0,0.7);
+  border-radius: 14px;
+}
+
+.bezel-inset {
+  background:
+    linear-gradient(180deg, #0b0b10, #131319);
+  border: 1px solid #05050a;
+  box-shadow:
+    inset 0 2px 6px rgba(0,0,0,0.9),
+    inset 0 -1px 0 #24242c;
+  border-radius: 10px;
+}
+
+.screw {
+  width: 10px; height: 10px; border-radius: 50%;
+  background: radial-gradient(circle at 30% 30%, #4a4a55, #1a1a20 60%, #050506 100%);
+  box-shadow: inset 0 0 2px #000, 0 1px 0 #2a2a30;
+  position: relative;
+}
+.screw::before {
+  content: ""; position: absolute; inset: 0; margin: auto;
+  width: 6px; height: 1px; background: #0a0a0e; transform: rotate(35deg);
+  top: 50%; left: 50%; translate: -50% -50%;
+}
+
+.led {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: #1a1a20;
+  box-shadow: inset 0 0 2px #000;
+  transition: background 120ms, box-shadow 120ms;
+}
+.led.on {
+  background: var(--led);
+  box-shadow: 0 0 8px var(--led-glow), inset 0 0 2px #061f14;
+}
+.led.on.amber {
+  background: var(--accent);
+  box-shadow: 0 0 10px var(--accent-glow), inset 0 0 2px #2a1508;
+}
+
+.tactile-btn {
+  background: linear-gradient(180deg, #26262e, #16161c);
+  border: 1px solid #05050a;
+  box-shadow:
+    inset 0 1px 0 #3a3a44,
+    0 2px 0 #05050a,
+    0 6px 14px -6px rgba(0,0,0,0.8);
+  color: var(--text);
+  transition: transform 60ms ease-out, box-shadow 120ms;
+}
+.tactile-btn:hover { background: linear-gradient(180deg, #2c2c34, #1a1a20); }
+.tactile-btn:active {
+  transform: translateY(1px);
+  box-shadow: inset 0 1px 0 #3a3a44, 0 1px 0 #05050a;
+}
+.tactile-btn.armed {
+  color: var(--accent);
+  border-color: #3a1f0a;
+  box-shadow:
+    inset 0 1px 0 #3a3a44,
+    0 0 0 1px #3a1f0a,
+    0 0 22px var(--accent-glow);
+}
+
+.vu-track {
+  background: linear-gradient(90deg, #0a0a0e, #0f0f14);
+  border-radius: 3px;
+  overflow: hidden;
+  border: 1px solid #05050a;
+  height: 6px;
+}
+.vu-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #4ade80 0%, #f0c74a 70%, #ef476f 100%);
+  transition: width 40ms linear;
+}
+
+.knob-shell {
+  filter: drop-shadow(0 6px 10px rgba(0,0,0,0.55));
+  cursor: ns-resize;
+  user-select: none;
+  touch-action: none;
+}
+
+.readout {
+  background: linear-gradient(180deg, #06060a 0%, #0d0d12 100%);
+  border: 1px solid #05050a;
+  box-shadow: inset 0 1px 3px rgba(0,0,0,0.9);
+  color: var(--accent);
+  text-shadow: 0 0 6px var(--accent-glow);
+}
+
+.dropzone {
+  border: 2px dashed #3a3a44;
+  border-radius: 12px;
+  transition: all 160ms;
+  background:
+    repeating-linear-gradient(45deg, transparent 0 12px, rgba(240,134,58,0.03) 12px 13px),
+    linear-gradient(180deg, #14141a, #0e0e13);
+}
+.dropzone.hot {
+  border-color: var(--accent);
+  background:
+    repeating-linear-gradient(45deg, transparent 0 12px, rgba(240,134,58,0.09) 12px 13px),
+    linear-gradient(180deg, #1a1520, #12101a);
+  box-shadow: 0 0 30px var(--accent-glow);
+}
+
+/* remove default focus rings on the knobs (we manage focus manually) */
+.knob-shell:focus { outline: none; }
+
+::selection { background: var(--accent); color: #0a0a0d; }
