@@ -38,6 +38,11 @@ export default function Layerizer() {
   const [presetOpen, setPresetOpen] = useState(false);
   const [savedFlash, setSavedFlash] = useState(false);
 
+  // reverb IR selection + recording
+  const [reverbType, setReverbType] = useState("hall");
+  const [isRecording, setIsRecording] = useState(false);
+  const [recSeconds, setRecSeconds] = useState(0);
+
   // create engine lazily on first user gesture
   const ensureEngine = useCallback(async () => {
     if (!engineRef.current) engineRef.current = new GranularEngine();
@@ -115,6 +120,51 @@ export default function Layerizer() {
     engineRef.current?.setLoop(s, en);
   };
 
+  // scrub playhead → jump grain read position
+  const onScrub = (t) => {
+    engineRef.current?.setReadPos(t);
+  };
+
+  // reverb IR change
+  const onReverbTypeChange = (v) => {
+    setReverbType(v);
+    engineRef.current?.setReverbType(v);
+  };
+
+  // Record toggle: start capture → on stop download WAV
+  const toggleRecord = async () => {
+    const engine = engineRef.current;
+    if (!engine) return;
+    if (isRecording) {
+      const blob = engine.stopRecording();
+      setIsRecording(false);
+      setRecSeconds(0);
+      if (blob) {
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+        a.href = url;
+        a.download = `texturizer-${stamp}.wav`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        setTimeout(() => URL.revokeObjectURL(url), 4000);
+      }
+    } else {
+      await ensureEngine();
+      engineRef.current.startRecording();
+      setIsRecording(true);
+    }
+  };
+
+  // Record timer
+  useEffect(() => {
+    if (!isRecording) return;
+    const t0 = Date.now();
+    const id = setInterval(() => setRecSeconds((Date.now() - t0) / 1000), 200);
+    return () => clearInterval(id);
+  }, [isRecording]);
+
   // playhead source for waveform (stable identity)
   const getReadPos = useCallback(() => engineRef.current?.getReadPos?.() ?? 0, []);
 
@@ -166,7 +216,7 @@ export default function Layerizer() {
           <div>
             <div className="font-display text-[11px] text-[color:var(--text-mute)] tracking-[0.3em]">GRANULAR TEXTURE UNIT · MK1</div>
             <div className="font-display text-3xl md:text-5xl mt-2" style={{ color: "var(--text)" }}>
-              LAYER<span style={{ color: ACCENT }}>I</span>ZER
+              TEXTUR<span style={{ color: ACCENT }}>I</span>ZER
             </div>
           </div>
 
@@ -206,6 +256,15 @@ export default function Layerizer() {
             >
               ☰ PRESETS
             </button>
+            <button
+              className={`tactile-btn px-4 py-3 rounded-md font-label text-[11px] ${isRecording ? "armed" : ""}`}
+              onClick={toggleRecord}
+              data-testid="record-btn"
+              title="Record processed output to WAV"
+              style={isRecording ? { color: "var(--danger)", boxShadow: "0 0 22px #ef476f66, inset 0 1px 0 #3a3a44" } : undefined}
+            >
+              {isRecording ? `● REC ${recSeconds.toFixed(1)}s` : "● REC"}
+            </button>
 
             <button
               className={`tactile-btn px-5 py-3 rounded-md font-label text-[13px] ${isPlaying ? "armed" : ""}`}
@@ -228,6 +287,7 @@ export default function Layerizer() {
           loopStart={loopStart}
           loopEnd={loopEnd || duration || 0}
           onLoopChange={onLoopChange}
+          onScrub={onScrub}
           getReadPos={getReadPos}
           isPlaying={isPlaying}
           accent={ACCENT}
@@ -333,12 +393,39 @@ export default function Layerizer() {
               onChange={(v) => setParam("autopan", v)}
               format={fmtPct} accent={ACCENT}
             />
-            <Knob
-              label="REVERB" testId="knob-reverb"
-              value={params.reverb} min={0} max={1} step={0.01} defaultValue={0.25}
-              onChange={(v) => setParam("reverb", v)}
-              format={fmtPct} accent={ACCENT}
-            />
+            <div className="flex flex-col items-center" data-testid="reverb-group">
+              <Knob
+                label="REVERB" testId="knob-reverb"
+                value={params.reverb} min={0} max={1} step={0.01} defaultValue={0.25}
+                onChange={(v) => setParam("reverb", v)}
+                format={fmtPct} accent={ACCENT}
+              />
+              <div className="flex gap-1 mt-2" data-testid="reverb-ir-selector">
+                {["room","plate","hall","spring"].map((k) => (
+                  <button
+                    key={k}
+                    onClick={() => onReverbTypeChange(k)}
+                    className="font-label px-2 py-1 rounded"
+                    style={{
+                      fontSize: 9,
+                      border: "1px solid #05050a",
+                      background: reverbType === k
+                        ? "linear-gradient(180deg,#3a1f0a,#1a0f05)"
+                        : "linear-gradient(180deg,#26262e,#16161c)",
+                      color: reverbType === k ? ACCENT : "var(--text-dim)",
+                      boxShadow: reverbType === k
+                        ? `0 0 10px ${ACCENT}55, inset 0 1px 0 #3a3a44`
+                        : "inset 0 1px 0 #3a3a44",
+                      cursor: "pointer",
+                    }}
+                    data-testid={`reverb-ir-${k}`}
+                    title={`${k[0].toUpperCase()}${k.slice(1)} impulse response`}
+                  >
+                    {k.toUpperCase()}
+                  </button>
+                ))}
+              </div>
+            </div>
             <Knob
               label="STEREO WIDTH" testId="knob-stereo"
               value={params.stereo} min={0} max={2} step={0.01} defaultValue={1}
@@ -362,7 +449,7 @@ export default function Layerizer() {
       </div>
 
       <div className="mt-6 font-mono text-[10px] tracking-widest" style={{ color: "var(--text-mute)" }}>
-        LAYERIZER · WEB AUDIO GRANULAR PROCESSOR · PERSONAL BUILD
+        TEXTURIZER · WEB AUDIO GRANULAR PROCESSOR · PERSONAL BUILD
       </div>
 
       <PresetBrowser

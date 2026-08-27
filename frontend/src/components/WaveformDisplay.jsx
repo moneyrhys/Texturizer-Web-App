@@ -20,6 +20,7 @@ export default function WaveformDisplay({
   loopStart,
   loopEnd,
   onLoopChange,
+  onScrub,
   getReadPos,
   isPlaying,
   accent = "#f0863a",
@@ -181,31 +182,50 @@ export default function WaveformDisplay({
     let mode;
     if (near(t, loopStart)) mode = "start";
     else if (near(t, loopEnd)) mode = "end";
-    else mode = "select";
-    dragRef.current = { mode, startX: t, startS: loopStart, startE: loopEnd };
-    if (mode === "select") onLoopChange?.(t, t + 0.05);
+    else mode = "scrub";                // provisional — becomes "select" if user drags far enough
+    dragRef.current = {
+      mode, startX: t, startS: loopStart, startE: loopEnd,
+      pointerStartX: e.clientX, dragged: false,
+    };
   };
 
   const onPointerMove = (e) => {
     const d = dragRef.current;
     if (!d.mode || !buffer) return;
     const t = posFromEvent(e);
+    const px2sec = duration / wrapW;
     if (d.mode === "start") {
       onLoopChange?.(Math.min(t, loopEnd - 0.05), loopEnd);
     } else if (d.mode === "end") {
       onLoopChange?.(loopStart, Math.max(t, loopStart + 0.05));
-    } else if (d.mode === "select") {
-      const s = Math.min(d.startX, t);
-      const en = Math.max(d.startX, t);
-      onLoopChange?.(s, Math.max(s + 0.05, en));
+    } else if (d.mode === "scrub" || d.mode === "select") {
+      const movedPx = Math.abs(e.clientX - d.pointerStartX);
+      // if user drags more than 4 px, upgrade to a loop-selection
+      if (d.mode === "scrub" && movedPx > 4) {
+        d.mode = "select";
+      }
+      if (d.mode === "select") {
+        d.dragged = true;
+        const s = Math.min(d.startX, t);
+        const en = Math.max(d.startX, t);
+        onLoopChange?.(s, Math.max(s + 0.05, en));
+      }
     }
+    void px2sec;
   };
-  const onPointerUp = () => { dragRef.current.mode = null; };
+  const onPointerUp = () => {
+    const d = dragRef.current;
+    // pure click inside waveform (no meaningful drag) => scrub playhead
+    if (d.mode === "scrub" && !d.dragged) {
+      onScrub?.(d.startX);
+    }
+    dragRef.current.mode = null;
+  };
 
   return (
     <div className="w-full">
       <div className="flex items-center justify-between mb-2 px-1">
-        <div className="font-label text-[10px]" style={{ color: "var(--text-dim)" }}>WAVEFORM · LOOP REGION</div>
+        <div className="font-label text-[10px]" style={{ color: "var(--text-dim)" }}>WAVEFORM · CLICK TO SCRUB · DRAG TO LOOP</div>
         <div className="font-mono text-[10px]" style={{ color: "var(--text-mute)" }} data-testid="loop-readout">
           {duration > 0
             ? `${loopStart.toFixed(2)}s → ${loopEnd.toFixed(2)}s  |  ${(loopEnd - loopStart).toFixed(2)}s`

@@ -86,7 +86,8 @@ export class GranularEngine {
 
     // reverb
     this.reverbNode = this.ctx.createConvolver();
-    this.reverbNode.buffer = this._makeImpulseResponse(2.6, 2.4);
+    this.reverbType = "hall";
+    this.reverbNode.buffer = this._makeIR("hall");
     this.reverbWet = this.ctx.createGain();
     this.reverbDry = this.ctx.createGain();
     this.reverbWet.gain.value = this.params.reverb;
@@ -171,11 +172,107 @@ export class GranularEngine {
       const d = ir.getChannelData(ch);
       for (let i = 0; i < len; i++) {
         const t = i / len;
-        // exponential decay + slight early reflection tail
         d[i] = (Math.random() * 2 - 1) * Math.pow(1 - t, decay);
       }
     }
     return ir;
+  }
+
+  // Distinct-sounding IRs synthesised at runtime — no external assets needed.
+  _makeIR(kind) {
+    const sr = this.ctx.sampleRate;
+    if (kind === "hall") {
+      // long, diffuse, gentle decay
+      const dur = 3.2;
+      const ir = this.ctx.createBuffer(2, Math.floor(sr * dur), sr);
+      for (let ch = 0; ch < 2; ch++) {
+        const d = ir.getChannelData(ch);
+        for (let i = 0; i < d.length; i++) {
+          const t = i / d.length;
+          // build-up + long tail
+          const env = Math.pow(1 - t, 2.6) * (1 - Math.exp(-i / (sr * 0.03)));
+          d[i] = (Math.random() * 2 - 1) * env;
+        }
+      }
+      return ir;
+    }
+    if (kind === "plate") {
+      // bright, dense, medium decay, metallic character via HF emphasis
+      const dur = 1.9;
+      const ir = this.ctx.createBuffer(2, Math.floor(sr * dur), sr);
+      for (let ch = 0; ch < 2; ch++) {
+        const d = ir.getChannelData(ch);
+        let prev = 0;
+        for (let i = 0; i < d.length; i++) {
+          const t = i / d.length;
+          const env = Math.pow(1 - t, 3.4);
+          // HP-flavoured white noise (dense, brighter)
+          const n = Math.random() * 2 - 1;
+          const hp = n - prev * 0.6;
+          prev = n;
+          d[i] = hp * env;
+        }
+      }
+      return ir;
+    }
+    if (kind === "spring") {
+      // short, wobbly, ringy: sum of decaying sines at spring modes
+      const dur = 1.4;
+      const ir = this.ctx.createBuffer(2, Math.floor(sr * dur), sr);
+      const modes = [ [180, 1.0], [340, 0.7], [640, 0.55], [1120, 0.4] ];
+      for (let ch = 0; ch < 2; ch++) {
+        const d = ir.getChannelData(ch);
+        const detune = ch === 0 ? 1 : 1.008;
+        for (let i = 0; i < d.length; i++) {
+          const t = i / sr;
+          const env = Math.pow(1 - i / d.length, 2.2);
+          let s = 0;
+          for (const [f, a] of modes) {
+            // slight FM wobble for spring character
+            const wob = Math.sin(2 * Math.PI * 4.5 * t) * 0.004;
+            s += Math.sin(2 * Math.PI * f * detune * (t + wob)) * a;
+          }
+          // sprinkle of noise
+          s += (Math.random() * 2 - 1) * 0.15;
+          d[i] = s * env * 0.35;
+        }
+      }
+      return ir;
+    }
+    if (kind === "room") {
+      // tight, small early reflections
+      const dur = 0.6;
+      const ir = this.ctx.createBuffer(2, Math.floor(sr * dur), sr);
+      for (let ch = 0; ch < 2; ch++) {
+        const d = ir.getChannelData(ch);
+        for (let i = 0; i < d.length; i++) {
+          const t = i / d.length;
+          const env = Math.pow(1 - t, 5.0);
+          d[i] = (Math.random() * 2 - 1) * env;
+        }
+        // add a few discrete taps
+        [0.011, 0.023, 0.041, 0.067].forEach((td, k) => {
+          const idx = Math.floor(td * sr);
+          if (idx < d.length) d[idx] += (k % 2 ? -1 : 1) * (0.6 - k * 0.1);
+        });
+      }
+      return ir;
+    }
+    return this._makeImpulseResponse();
+  }
+
+  setReverbType(kind) {
+    if (!this.ctx || !this.reverbNode) { this.reverbType = kind; return; }
+    if (kind === this.reverbType) return;
+    this.reverbType = kind;
+    this.reverbNode.buffer = this._makeIR(kind);
+  }
+
+  setReadPos(seconds) {
+    if (!this.buffer) return;
+    const dur = this.buffer.duration;
+    this.readPos = Math.max(0, Math.min(dur, seconds));
+    // if it's outside the loop, still clamp inside on the next grain via _scheduleAhead
   }
 
   async loadFile(file) {
@@ -417,8 +514,97 @@ export class GranularEngine {
       sum += this._levelBuf[i] * this._levelBuf[i];
     }
     const rms = Math.sqrt(sum / this._levelBuf.length);
-    // simple ballistic smoothing
     this.rms = this.rms * 0.7 + rms * 0.3;
     return this.rms;
   }
+
+  // ---------------- Recording (live capture → WAV) ----------------
+  startRecording() {
+    if (!this.ctx || this._recNode) return;
+    const bufSize = 4096;
+    const numCh = 2;
+    // Use ScriptProcessorNode (widely supported, simple JS capture)
+    this._recNode = this.ctx.createScriptProcessor(bufSize, numCh, numCh);
+    this._recChunks = [[], []];
+    this._recSampleRate = this.ctx.sampleRate;
+    this._recNode.onaudioprocess = (e) => {
+      for (let ch = 0; ch < numCh; ch++) {
+        // copy — the input buffer is reused
+        const src = e.inputBuffer.getChannelData(ch);
+        this._recChunks[ch].push(new Float32Array(src));
+      }
+    };
+    // tap the master output pre-analyser
+    this.masterOut.connect(this._recNode);
+    // ScriptProcessor requires a destination connection to actually pull audio
+    this._recNode.connect(this.ctx.destination);
+    // Silence the pass-through (we only want the tap, not double audio)
+    // Trick: run through a mute gain
+    // (we can't cleanly gate the SP output; but its own output is the *input* buffer, not our audio.
+    //  In practice its output is empty since we don't write to outputBuffer.)
+  }
+
+  stopRecording() {
+    if (!this._recNode) return null;
+    const chunks = this._recChunks;
+    const sr = this._recSampleRate;
+    try {
+      this.masterOut.disconnect(this._recNode);
+      this._recNode.disconnect();
+      this._recNode.onaudioprocess = null;
+    } catch (e) { /* noop */ }
+    this._recNode = null;
+    this._recChunks = null;
+
+    // Flatten
+    const flatten = (arr) => {
+      let total = 0;
+      for (const c of arr) total += c.length;
+      const out = new Float32Array(total);
+      let o = 0;
+      for (const c of arr) { out.set(c, o); o += c.length; }
+      return out;
+    };
+    const L = flatten(chunks[0]);
+    const R = flatten(chunks[1]);
+    return encodeWAV([L, R], sr);
+  }
+  // ---------------- /Recording ----------------
+}
+
+// Interleaved 16-bit PCM WAV encoder.
+function encodeWAV(channels, sampleRate) {
+  const numCh = channels.length;
+  const numSamples = channels[0].length;
+  const bytesPerSample = 2;
+  const blockAlign = numCh * bytesPerSample;
+  const dataSize = numSamples * blockAlign;
+  const buffer = new ArrayBuffer(44 + dataSize);
+  const view = new DataView(buffer);
+
+  const writeStr = (off, s) => { for (let i = 0; i < s.length; i++) view.setUint8(off + i, s.charCodeAt(i)); };
+
+  writeStr(0, "RIFF");
+  view.setUint32(4, 36 + dataSize, true);
+  writeStr(8, "WAVE");
+  writeStr(12, "fmt ");
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);              // PCM
+  view.setUint16(22, numCh, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * blockAlign, true);
+  view.setUint16(32, blockAlign, true);
+  view.setUint16(34, 16, true);             // bits per sample
+  writeStr(36, "data");
+  view.setUint32(40, dataSize, true);
+
+  let offset = 44;
+  for (let i = 0; i < numSamples; i++) {
+    for (let ch = 0; ch < numCh; ch++) {
+      let s = Math.max(-1, Math.min(1, channels[ch][i]));
+      view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+      offset += 2;
+    }
+  }
+  return new Blob([buffer], { type: "audio/wav" });
 }

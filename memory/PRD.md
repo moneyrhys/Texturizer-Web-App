@@ -1,4 +1,4 @@
-# Layerizer — Web-based Granular Audio Processor
+# Texturizer — Web-based Granular Audio Processor (formerly Layerizer)
 
 ## Original Problem Statement
 Clone the concept of jaycactus.com/layerizer as a personal, web-based real-time
@@ -34,17 +34,21 @@ dark, tactile, single screen, live in-browser playback.
 - **Live green playhead** driven by `engine.getReadPos()` via RAF
 - **SAVE** button snapshots current knob state to localStorage (auto-named by time)
 - **PRESETS** modal: load / rename (dbl-click) / delete, with summary of each preset
+- **Impulse Library** dropdown under Reverb knob: Room / Plate / Hall / Spring (synthesised IRs with distinct character — hall = long diffuse, plate = bright dense, spring = wobbly ringing modes, room = tight early reflections)
+- **Click-to-scrub** on the waveform: single click jumps `readPos`; drag still creates a loop selection (upgrade after 4 px of movement)
+- **Record Output**: REC button in header taps `masterOut` via ScriptProcessorNode, encodes 16-bit PCM WAV client-side, auto-downloads on stop as `texturizer-YYYY-MM-DDTHH-MM-SS.wav`
+- Brand renamed **LAYERIZER → TEXTURIZER** across title, footer, tab title and download prefix
 
 ## Personas
 - Beatmakers / producers wanting textured background layers from any melody
 - Sound designers experimenting with granular processing in the browser
 
 ## Next / Backlog (P1)
-- Record processed audio to WAV (offline render)
 - Freeze button (captures the current grain cloud)
-- Real IR reverbs (halls, plates, springs) instead of generated burst
+- Load real convolver IRs (WAV) instead of synthesised (optional upgrade)
 - MIDI learn for knob mapping
 - BPM sync for autopan LFO / grain rate
+- Show record duration + peak meter while recording
 
 ## Backlog (P2)
 - Sidechain input for storm modulation
