@@ -88,6 +88,7 @@ export class GranularEngine {
     this.reverbNode = this.ctx.createConvolver();
     this.reverbType = "hall";
     this.reverbNode.buffer = this._makeIR("hall");
+    this.userIRs = {}; // { id: { name, buffer } }
     this.reverbWet = this.ctx.createGain();
     this.reverbDry = this.ctx.createGain();
     this.reverbWet.gain.value = this.params.reverb;
@@ -265,7 +266,21 @@ export class GranularEngine {
     if (!this.ctx || !this.reverbNode) { this.reverbType = kind; return; }
     if (kind === this.reverbType) return;
     this.reverbType = kind;
-    this.reverbNode.buffer = this._makeIR(kind);
+    if (this.userIRs[kind]) {
+      this.reverbNode.buffer = this.userIRs[kind].buffer;
+    } else {
+      this.reverbNode.buffer = this._makeIR(kind);
+    }
+  }
+
+  async addUserIR(file) {
+    await this.init();
+    const arr = await file.arrayBuffer();
+    const buf = await this.ctx.decodeAudioData(arr);
+    const id = "user_" + Date.now().toString(36);
+    const name = file.name.replace(/\.[^.]+$/, "").slice(0, 14);
+    this.userIRs[id] = { name, buffer: buf };
+    return { id, name };
   }
 
   setReadPos(seconds) {
@@ -309,6 +324,8 @@ export class GranularEngine {
   }
 
   setParam(name, value) {
+    if (name === "_autopanRateHz") { this._autopanRateHz = value; return; }
+    if (name === "_stormRateHz")   { this._stormRateHz   = value; return; }
     if (!(name in this.params)) return;
     this.params[name] = value;
 
@@ -378,7 +395,8 @@ export class GranularEngine {
     const p = this.params;
     const a = p.storm;
     const dt = 0.02;
-    this._stormPhase += dt * (0.2 + a * 4.0);
+    const stormFreq = this._stormRateHz != null ? this._stormRateHz : (0.2 + a * 4.0);
+    this._stormPhase += dt * stormFreq;
     while (this._stormPhase >= 1) {
       this._stormPhase -= 1;
       this._stormTarget = Math.random() * 2 - 1;
@@ -479,7 +497,7 @@ export class GranularEngine {
 
     // schedule autopan LFO
     if (p.autopan > 0) {
-      const rateHz = 0.25 + p.autopan * 3.0;
+      const rateHz = this._autopanRateHz != null ? this._autopanRateHz : (0.25 + p.autopan * 3.0);
       const now = when;
       const depth = p.autopan;
       // sample a few points for smoothness
@@ -527,12 +545,18 @@ export class GranularEngine {
     this._recNode = this.ctx.createScriptProcessor(bufSize, numCh, numCh);
     this._recChunks = [[], []];
     this._recSampleRate = this.ctx.sampleRate;
+    this._recPeak = 0;
     this._recNode.onaudioprocess = (e) => {
+      let peak = 0;
       for (let ch = 0; ch < numCh; ch++) {
-        // copy — the input buffer is reused
         const src = e.inputBuffer.getChannelData(ch);
         this._recChunks[ch].push(new Float32Array(src));
+        for (let i = 0; i < src.length; i++) {
+          const a = Math.abs(src[i]);
+          if (a > peak) peak = a;
+        }
       }
+      this._recPeak = Math.max(this._recPeak * 0.85, peak);
     };
     // tap the master output pre-analyser
     this.masterOut.connect(this._recNode);
@@ -548,6 +572,7 @@ export class GranularEngine {
     if (!this._recNode) return null;
     const chunks = this._recChunks;
     const sr = this._recSampleRate;
+    this._recPeak = 0;
     try {
       this.masterOut.disconnect(this._recNode);
       this._recNode.disconnect();
@@ -568,6 +593,9 @@ export class GranularEngine {
     const L = flatten(chunks[0]);
     const R = flatten(chunks[1]);
     return encodeWAV([L, R], sr);
+  }
+  getRecordPeak() {
+    return this._recPeak || 0;
   }
   // ---------------- /Recording ----------------
 }

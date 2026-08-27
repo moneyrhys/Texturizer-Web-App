@@ -4,6 +4,7 @@ import WaveformDisplay from "./WaveformDisplay";
 import PresetBrowser from "./PresetBrowser";
 import { GranularEngine } from "../audio/GranularEngine";
 import { savePreset } from "../utils/presets";
+import { DIVISIONS, knobToDivision, grainSizeFromDivision, rateHzFromDivision, stretchFromDivision } from "../utils/bpm";
 
 const ACCENT = "#f0863a";
 const LED_GREEN = "#6ee7b7";
@@ -40,8 +41,14 @@ export default function Layerizer() {
 
   // reverb IR selection + recording
   const [reverbType, setReverbType] = useState("hall");
+  const [userIRs, setUserIRs] = useState([]); // [{id, name}]
   const [isRecording, setIsRecording] = useState(false);
   const [recSeconds, setRecSeconds] = useState(0);
+  const [recPeak, setRecPeak] = useState(0);
+
+  // BPM sync
+  const [bpm, setBpm] = useState(120);
+  const [sync, setSync] = useState({ grainSize: false, stretch: false, autopan: false, storm: false });
 
   // create engine lazily on first user gesture
   const ensureEngine = useCallback(async () => {
@@ -53,6 +60,46 @@ export default function Layerizer() {
   const setParam = (name, value) => {
     setParams((prev) => ({ ...prev, [name]: value }));
     engineRef.current?.setParam(name, value);
+  };
+
+  // BPM-synced knob change: value is 0..1 (division index normalised)
+  const setSyncedParam = (name, value01) => {
+    const { cpb } = knobToDivision(value01);
+    let underlying;
+    if (name === "grainSize") underlying = grainSizeFromDivision(bpm, cpb);
+    else if (name === "autopan") {
+      // autopan param stays 0..1 for depth; when synced, the *rate* is BPM-locked.
+      // We store the raw knob position so the label shows division; depth = value01.
+      underlying = value01;
+    }
+    else if (name === "stretch") underlying = stretchFromDivision(cpb);
+    else if (name === "storm") underlying = value01; // depth stays user-driven; rate locked
+    else underlying = value01;
+    setParams((prev) => ({ ...prev, [name]: underlying, [`_sync_${name}`]: value01 }));
+    engineRef.current?.setParam(name, underlying);
+    // push BPM-derived autopan rate directly to engine when synced
+    if (name === "autopan") engineRef.current?.setParam("_autopanRateHz", rateHzFromDivision(bpm, cpb));
+    if (name === "storm")   engineRef.current?.setParam("_stormRateHz",   rateHzFromDivision(bpm, cpb));
+  };
+
+  const toggleSync = (name) => {
+    setSync((prev) => {
+      const next = { ...prev, [name]: !prev[name] };
+      return next;
+    });
+  };
+
+  const handleIRUpload = async (files) => {
+    const f = files?.[0];
+    if (!f) return;
+    try {
+      const engine = await ensureEngine();
+      const { id, name } = await engine.addUserIR(f);
+      setUserIRs((prev) => [...prev, { id, name }]);
+      onReverbTypeChange(id);
+    } catch (e) {
+      console.error("IR decode failed", e);
+    }
   };
 
   const handleFiles = async (fileList) => {
@@ -157,11 +204,14 @@ export default function Layerizer() {
     }
   };
 
-  // Record timer
+  // Record timer + peak
   useEffect(() => {
-    if (!isRecording) return;
+    if (!isRecording) { setRecPeak(0); return; }
     const t0 = Date.now();
-    const id = setInterval(() => setRecSeconds((Date.now() - t0) / 1000), 200);
+    const id = setInterval(() => {
+      setRecSeconds((Date.now() - t0) / 1000);
+      setRecPeak(engineRef.current?.getRecordPeak?.() ?? 0);
+    }, 80);
     return () => clearInterval(id);
   }, [isRecording]);
 
@@ -240,6 +290,21 @@ export default function Layerizer() {
               </div>
             </div>
 
+            <div className="flex flex-col items-center bezel-inset px-3 py-2" data-testid="bpm-panel">
+              <span className="font-label text-[9px]" style={{ color: "var(--text-dim)" }}>TEMPO</span>
+              <input
+                type="number"
+                min={40}
+                max={220}
+                value={bpm}
+                onChange={(e) => setBpm(Math.max(40, Math.min(220, Number(e.target.value) || 120)))}
+                className="font-mono bg-transparent outline-none w-14 text-center"
+                style={{ color: "var(--accent)", fontSize: 18 }}
+                data-testid="bpm-input"
+              />
+              <span className="font-label text-[9px]" style={{ color: "var(--text-mute)" }}>BPM</span>
+            </div>
+
             <button
               className={`tactile-btn px-4 py-3 rounded-md font-label text-[11px] ${savedFlash ? "armed" : ""}`}
               onClick={handleSave}
@@ -257,13 +322,44 @@ export default function Layerizer() {
               ☰ PRESETS
             </button>
             <button
-              className={`tactile-btn px-4 py-3 rounded-md font-label text-[11px] ${isRecording ? "armed" : ""}`}
+              className={`tactile-btn rounded-md font-label text-[11px] ${isRecording ? "armed" : ""}`}
               onClick={toggleRecord}
               data-testid="record-btn"
               title="Record processed output to WAV"
-              style={isRecording ? { color: "var(--danger)", boxShadow: "0 0 22px #ef476f66, inset 0 1px 0 #3a3a44" } : undefined}
+              style={{
+                padding: "6px 10px",
+                minWidth: 140,
+                color: isRecording ? "var(--danger)" : "var(--text)",
+                boxShadow: isRecording ? "0 0 22px #ef476f66, inset 0 1px 0 #3a3a44" : undefined,
+              }}
             >
-              {isRecording ? `● REC ${recSeconds.toFixed(1)}s` : "● REC"}
+              <div className="flex items-center gap-2">
+                <span style={{ fontSize: 14, color: isRecording ? "var(--danger)" : "var(--text-dim)" }}>●</span>
+                <div className="flex flex-col items-start" style={{ minWidth: 84 }}>
+                  <span style={{ fontSize: 11 }}>{isRecording ? `REC ${recSeconds.toFixed(1)}s` : "REC"}</span>
+                  {isRecording && (
+                    <div
+                      style={{
+                        width: 84, height: 4, marginTop: 3,
+                        background: "#0a0a0e", borderRadius: 2, overflow: "hidden",
+                        boxShadow: "inset 0 1px 2px #000",
+                      }}
+                      data-testid="rec-peak"
+                    >
+                      <div
+                        style={{
+                          height: "100%",
+                          width: `${Math.min(100, recPeak * 100)}%`,
+                          background: recPeak > 0.95
+                            ? "linear-gradient(90deg,#4ade80,#f0c74a 55%,#ef476f 85%)"
+                            : "linear-gradient(90deg,#4ade80,#f0c74a 70%,#ef476f 100%)",
+                          transition: "width 60ms linear",
+                        }}
+                      />
+                    </div>
+                  )}
+                </div>
+              </div>
             </button>
 
             <button
