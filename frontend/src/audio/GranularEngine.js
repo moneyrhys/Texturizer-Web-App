@@ -18,6 +18,10 @@ export class GranularEngine {
     this.nextGrainAt = 0;          // audio ctx time
     this.schedulerId = null;
 
+    // loop region (seconds). null = whole buffer
+    this.loopStart = 0;
+    this.loopEnd = null;
+
     // params (with sensible defaults)
     this.params = {
       pitch: 0,          // semitones -24..24
@@ -179,7 +183,32 @@ export class GranularEngine {
     const arr = await file.arrayBuffer();
     this.buffer = await this.ctx.decodeAudioData(arr);
     this.readPos = 0;
+    this.loopStart = 0;
+    this.loopEnd = this.buffer.duration;
     return this.buffer;
+  }
+
+  setLoop(start, end) {
+    if (!this.buffer) return;
+    const dur = this.buffer.duration;
+    let s = Math.max(0, Math.min(dur, start));
+    let e = Math.max(0, Math.min(dur, end));
+    if (e - s < 0.05) e = Math.min(dur, s + 0.05);
+    this.loopStart = s;
+    this.loopEnd = e;
+    // Reflect loop in the dry source if it's playing
+    if (this._dryNode) {
+      try {
+        this._dryNode.loopStart = s;
+        this._dryNode.loopEnd = e;
+      } catch (err) { /* noop */ }
+    }
+    // if readPos is outside new loop, jump it in
+    if (this.readPos < s || this.readPos > e) this.readPos = s;
+  }
+
+  getReadPos() {
+    return this.readPos;
   }
 
   setParam(name, value) {
@@ -238,8 +267,12 @@ export class GranularEngine {
     const src = this.ctx.createBufferSource();
     src.buffer = this.buffer;
     src.loop = true;
+    if (this.loopEnd != null) {
+      src.loopStart = this.loopStart;
+      src.loopEnd = this.loopEnd;
+    }
     src.connect(this.dryGain);
-    src.start(0);
+    src.start(0, this.loopStart);
     this._dryNode = src;
   }
 
@@ -293,7 +326,11 @@ export class GranularEngine {
       // advance read head based on stretch (0 = normal, 1 = frozen)
       const advance = interval * (1 - p.stretch);
       this.readPos += advance;
-      if (this.readPos >= this.buffer.duration) this.readPos = this.readPos % this.buffer.duration;
+      const lStart = this.loopStart;
+      const lEnd = this.loopEnd ?? this.buffer.duration;
+      const lLen = Math.max(0.05, lEnd - lStart);
+      if (this.readPos >= lEnd) this.readPos = lStart + ((this.readPos - lStart) % lLen);
+      if (this.readPos < lStart) this.readPos = lStart;
     }
   }
 
@@ -313,9 +350,12 @@ export class GranularEngine {
     // random offset within a small window around readPos (spread scales with storm)
     const spreadWindow = 0.05 + p.storm * 0.35; // seconds
     const offset = (Math.random() - 0.5) * spreadWindow * 2;
+    const lStart = this.loopStart;
+    const lEnd = this.loopEnd ?? this.buffer.duration;
+    const lLen = Math.max(0.05, lEnd - lStart);
     let start = this.readPos + offset;
-    // wrap into buffer duration
-    start = ((start % this.buffer.duration) + this.buffer.duration) % this.buffer.duration;
+    // wrap inside the loop region
+    start = lStart + (((start - lStart) % lLen) + lLen) % lLen;
 
     const src = this.ctx.createBufferSource();
     src.buffer = this.buffer;

@@ -1,6 +1,9 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import Knob from "./Knob";
+import WaveformDisplay from "./WaveformDisplay";
+import PresetBrowser from "./PresetBrowser";
 import { GranularEngine } from "../audio/GranularEngine";
+import { savePreset } from "../utils/presets";
 
 const ACCENT = "#f0863a";
 const LED_GREEN = "#6ee7b7";
@@ -26,6 +29,14 @@ export default function Layerizer() {
     reverb: 0.25,
     stereo: 1.0,
   });
+
+  // loop region (seconds) — set when a file loads
+  const [loopStart, setLoopStart] = useState(0);
+  const [loopEnd, setLoopEnd] = useState(0);
+
+  // preset browser state
+  const [presetOpen, setPresetOpen] = useState(false);
+  const [savedFlash, setSavedFlash] = useState(false);
 
   // create engine lazily on first user gesture
   const ensureEngine = useCallback(async () => {
@@ -54,6 +65,8 @@ export default function Layerizer() {
       const buf = await engine.loadFile(file);
       setFileName(file.name);
       setDuration(buf.duration);
+      setLoopStart(0);
+      setLoopEnd(buf.duration);
       setReady(true);
     } catch (e) {
       console.error(e);
@@ -95,6 +108,35 @@ export default function Layerizer() {
   const onDragOver = (e) => { e.preventDefault(); setDragHot(true); };
   const onDragLeave = () => setDragHot(false);
 
+  // loop change → push into engine
+  const onLoopChange = (s, en) => {
+    setLoopStart(s);
+    setLoopEnd(en);
+    engineRef.current?.setLoop(s, en);
+  };
+
+  // playhead source for waveform (stable identity)
+  const getReadPos = useCallback(() => engineRef.current?.getReadPos?.() ?? 0, []);
+
+  // Save current unit state as a preset (silent, immediate)
+  const handleSave = () => {
+    const stamp = new Date();
+    const name = `Preset ${stamp.getHours().toString().padStart(2, "0")}:${stamp.getMinutes().toString().padStart(2, "0")}:${stamp.getSeconds().toString().padStart(2, "0")}`;
+    savePreset(name, params);
+    setSavedFlash(true);
+    setTimeout(() => setSavedFlash(false), 1200);
+  };
+
+  // Apply a preset's params to state and engine
+  const handleLoadPreset = (preset) => {
+    const next = { ...params, ...preset.params };
+    setParams(next);
+    const engine = engineRef.current;
+    if (engine) {
+      Object.entries(next).forEach(([k, v]) => engine.setParam(k, v));
+    }
+  };
+
   // keyboard: space toggles play
   useEffect(() => {
     const onKey = (e) => {
@@ -128,8 +170,8 @@ export default function Layerizer() {
             </div>
           </div>
 
-          {/* Transport + level */}
-          <div className="flex items-center gap-4">
+          {/* Transport + level + preset controls */}
+          <div className="flex items-center gap-3 flex-wrap">
             <div className="flex flex-col gap-1 min-w-[220px]">
               <div className="flex items-center justify-between">
                 <span className="font-label text-[10px]" style={{ color: "var(--text-dim)" }}>OUTPUT</span>
@@ -149,6 +191,23 @@ export default function Layerizer() {
             </div>
 
             <button
+              className={`tactile-btn px-4 py-3 rounded-md font-label text-[11px] ${savedFlash ? "armed" : ""}`}
+              onClick={handleSave}
+              data-testid="save-preset-btn"
+              title="Snapshot current knob state to browser storage"
+            >
+              {savedFlash ? "✓ SAVED" : "💾 SAVE"}
+            </button>
+            <button
+              className="tactile-btn px-4 py-3 rounded-md font-label text-[11px]"
+              onClick={() => setPresetOpen(true)}
+              data-testid="open-presets-btn"
+              title="Open preset browser"
+            >
+              ☰ PRESETS
+            </button>
+
+            <button
               className={`tactile-btn px-5 py-3 rounded-md font-label text-[13px] ${isPlaying ? "armed" : ""}`}
               onClick={onPlayToggle}
               disabled={!ready}
@@ -160,6 +219,20 @@ export default function Layerizer() {
             </button>
           </div>
         </div>
+      </div>
+
+      {/* WAVEFORM STRIP */}
+      <div className="w-full max-w-[1180px] panel grain p-5 mb-6" data-testid="waveform-panel">
+        <WaveformDisplay
+          buffer={engineRef.current?.buffer}
+          loopStart={loopStart}
+          loopEnd={loopEnd || duration || 0}
+          onLoopChange={onLoopChange}
+          getReadPos={getReadPos}
+          isPlaying={isPlaying}
+          accent={ACCENT}
+          ledColor={LED_GREEN}
+        />
       </div>
 
       {/* MAIN RACK: dropzone + knob matrix */}
@@ -291,6 +364,13 @@ export default function Layerizer() {
       <div className="mt-6 font-mono text-[10px] tracking-widest" style={{ color: "var(--text-mute)" }}>
         LAYERIZER · WEB AUDIO GRANULAR PROCESSOR · PERSONAL BUILD
       </div>
+
+      <PresetBrowser
+        open={presetOpen}
+        onClose={() => setPresetOpen(false)}
+        onLoad={handleLoadPreset}
+        currentParams={params}
+      />
     </div>
   );
 }
